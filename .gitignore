@@ -1,0 +1,19 @@
+/node_modules
+/entrypoint
+/product
+/data
+
+# Serverless & Webpack directories.
+/**/.serverless
+/**/.webpack
+
+# IDE, reference: https://github.com/github/gitignore/blob/master/Global/JetBrains.gitignore
+/.idea/dataSources
+/.idea/dataSources.ids
+/.idea/dataSources.local.xml
+/.idea/httpRequests/*
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/tasks.xml
+/.idea/vcs.xml
+/.idea/workspace.xml
