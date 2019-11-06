@@ -37,13 +37,13 @@ program
     .parse(process.argv);
 
 // Entrypoint…
-(() => {
+(async () => {
     const exportPath = program.source;
     const assetPath = program.destination;
     if (!exportPath || !assetPath) { throw new Error("The script requires both source and destination path CLI options, make sure to place `--` in front to instruct npm script to pass through the values.");}
 
     const assetCatalogs = fs.readdirSync(assetPath).filter((f) => path.extname(f) === ".xcassets");
-    const result = assetCatalogs.map((file) => syncAssetCatalog(path.join(assetPath, file), exportPath));
+    const result = await Promise.all(assetCatalogs.map((file) => syncAssetCatalog(path.join(assetPath, file), exportPath)));
 
     const unassignedImageSets = [] as string[];
     const updatedFiles = [] as string[];
@@ -71,33 +71,48 @@ program
 })();
 
 // Synchronizes the asset catalogue using images found in the source directory.
-function syncAssetCatalog(assetCatalogPath: string, imageSourcePath: string): AssetCatalogSyncResult {
+async function syncAssetCatalog(assetCatalogPath: string, imageSourcePath: string): Promise<AssetCatalogSyncResult> {
     const imageSets = fs.readdirSync(assetCatalogPath).filter((f) => path.extname(f) === ".imageset" || path.extname(f) === ".appiconset");
     const result = {} as AssetCatalogSyncResult;
 
-    imageSets.forEach((imageSet) => {
-        result[imageSet] = syncImageSet(path.join(assetCatalogPath, imageSet), imageSourcePath);
-    });
+    for (const imageSet of imageSets) {
+        result[imageSet] = await syncImageSet(path.join(assetCatalogPath, imageSet), imageSourcePath);
+    }
 
     return result;
 }
 
 // Synchronizes the image set using images found in the source directory.
-function syncImageSet(imageSetPath: string, imageSourcePath: string): ImageSetSyncResult {
+async function syncImageSet(imageSetPath: string, imageSourcePath: string): Promise<ImageSetSyncResult> {
     const contentsPath = path.join(imageSetPath, "Contents.json");
     const contents = JSON.parse(fs.readFileSync(contentsPath, "utf8")) as ImageSetContents;
     const result = new ImageSetSyncResult();
     let needsContentsUpdate = false;
 
-    contents.images.forEach((image) => {
+    for (const image of contents.images) {
         const oldImagePath = image.filename && path.join(imageSetPath, image.filename);
         const newImagePath = findImagePath(imageSetPath, imageSourcePath, image);
+
         const oldStat = oldImagePath && fs.existsSync(oldImagePath) && fs.statSync(oldImagePath);
         const newStat = newImagePath && fs.existsSync(newImagePath) && fs.statSync(newImagePath);
 
+        // ✊ The funny thing is that optimized images have no effect on the final build. Keep this for reference…
+        // const optimizedImagePath = newImagePath && path.join(imageSourcePath, "optimized", path.basename(newImagePath));
+        // let optimizedStat = optimizedImagePath && fs.existsSync(optimizedImagePath) && fs.statSync(optimizedImagePath);
+
+        // Create optimized image if it doesn't exist in the optimized directory or if it's timestamp differs from the current
+        // image. Looks like optimization level 4 is the last one causing significant reduction in larger files. Don't forget
+        // to update the optimized image timestamp and synchronize the file stat after.
+        // if (newImagePath && optimizedImagePath && newStat && (!optimizedStat || Math.round(optimizedStat.mtimeMs) !== Math.round(newStat.mtimeMs))) {
+        //     console.log(`Minimizing image: ${path.basename(newImagePath)}…`);
+        //     await imagemin([newImagePath], {destination: path.dirname(optimizedImagePath), plugins: [imageminJpegtran(), imageminOptipng({optimizationLevel: 0, colorTypeReduction: false, bitDepthReduction: false})]});
+        //     fs.utimesSync(optimizedImagePath, newStat.atime, newStat.mtime);
+        //     optimizedStat = fs.statSync(optimizedImagePath);
+        // }
+
         if (!newImagePath) {
             if (image.filename === undefined) { result.unassigned = true; } else { result.missing.push(image.filename); }
-            return;
+            continue;
         }
 
         if (!oldImagePath || path.basename(oldImagePath) !== path.basename(newImagePath)) {
@@ -106,12 +121,12 @@ function syncImageSet(imageSetPath: string, imageSourcePath: string): ImageSetSy
             needsContentsUpdate = true;
         } else if (oldStat && newStat && newStat.size === oldStat.size && Math.round(newStat.mtimeMs) === Math.round(oldStat.mtimeMs)) {
             result.skipped.push(image.filename);
-            return;
+            continue;
         }
 
         fs.copySync(newImagePath, path.join(imageSetPath, path.basename(newImagePath)), {preserveTimestamps: true});
         result.updated.push(image.filename);
-    });
+    }
 
     // Xcode uses fucking weirdo JSON formatting…
     if (needsContentsUpdate) { fs.writeFileSync(contentsPath, JSON.stringify(contents, null, 2).replace(/": /, `" : `)); }
